@@ -2,6 +2,8 @@
 package filesystem
 
 import (
+	"stegasis/video"
+
 	"github.com/billziss-gh/cgofuse/fuse"
 )
 
@@ -13,6 +15,7 @@ const (
 // fs implements the FUSE filesystem.
 type fs struct {
 	fuse.FileSystemBase
+	codec video.Codec
 }
 
 func (f *fs) Open(path string, flags int) (errc int, fh uint64) {
@@ -61,6 +64,8 @@ func (f *fs) Readdir(path string,
 }
 
 // New returns a new fs object which implements fuse.FileSystemInterface.
-func New() *fs {
-	return &fs{}
+func New(codec video.Codec) *fs {
+	return &fs{
+		codec: codec,
+	}
 }
