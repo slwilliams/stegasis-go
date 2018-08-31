@@ -18,16 +18,17 @@ type fs struct {
 	codec video.Codec
 }
 
-func (f *fs) Open(path string, flags int) (errc int, fh uint64) {
+func (f *fs) Open(path string, flags int) (int, uint64) {
 	switch path {
 	case "/" + filename:
 		return 0, 0
 	default:
 		return -fuse.ENOENT, ^uint64(0)
 	}
+	return 0, 0
 }
 
-func (f *fs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
+func (f *fs) Getattr(path string, stat *fuse.Stat_t, fh uint64) int {
 	switch path {
 	case "/":
 		stat.Mode = fuse.S_IFDIR | 0555
@@ -39,9 +40,10 @@ func (f *fs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	default:
 		return -fuse.ENOENT
 	}
+	return 0
 }
 
-func (f *fs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
+func (f *fs) Read(path string, buff []byte, ofst int64, fh uint64) int {
 	endofst := ofst + int64(len(buff))
 	if endofst > int64(len(contents)) {
 		endofst = int64(len(contents))
@@ -49,14 +51,10 @@ func (f *fs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
 	if endofst < ofst {
 		return 0
 	}
-	n = copy(buff, contents[ofst:endofst])
-	return
+	return copy(buff, contents[ofst:endofst])
 }
 
-func (f *fs) Readdir(path string,
-	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
-	ofst int64,
-	fh uint64) (errc int) {
+func (f *fs) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64, fh uint64) int {
 	fill(".", nil, 0)
 	fill("..", nil, 0)
 	fill(filename, nil, 0)
