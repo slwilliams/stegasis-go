@@ -2,6 +2,8 @@ package video
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 )
 
 // motionJPEGCodec uses FFMPEG to decode ~any video into a sequence of JPEG
@@ -14,18 +16,30 @@ type motionJPEGCodec struct {
 // Decode converts the source video file to a sequence of JPEG images via
 // FFMPEG and stores them in a tempory directory.
 func (c *motionJPEGCodec) Decode() error {
-	for _, f := range c.frames {
-		if f.IsDirty() {
-			// TODO: Write this frame out.
-		}
+	tempDir := fmt.Sprintf("%s\\stegasis", os.TempDir())
+	if err := os.Mkdir(tempDir, 0777); err != nil {
+		return fmt.Errorf("Failed to create temp directory: %v", err)
 	}
+	outputPattern := fmt.Sprintf("%s\\image-%%d.jpeg", tempDir)
+
+	fmt.Println("Extracting video frames to: %q ...", outputPattern)
+	args := []string{"-v", "quiet", "-stats", "-r", "25", "-i", c.filePath, "-qscale:v", "2", "-f", "image2", outputPattern}
+	if err := exec.Command("ffmpeg", args...).Run(); err != nil {
+		return fmt.Errorf("Failed to exec ffmpeg: %v", err)
+	}
+	fmt.Println("Successfully extracted video frames!")
+
 	return nil
 }
 
 // Encode converts the sequence of JPEG images to a motion JPEG video
 // overwriting the original source video.
 func (c *motionJPEGCodec) Encode() error {
-	// TODO Implement me.
+	for _, f := range c.frames {
+		if f.IsDirty() {
+			// TODO: Write this frame out.
+		}
+	}
 	return nil
 }
 
@@ -94,7 +108,8 @@ func (f *jpegFrame) IsDirty() bool {
 
 // NewMotionJPEGCodec returns a new motion JPEG codec.
 func NewMotionJPEGCodec(path string) (Codec, error) {
-	return &motionJPEGCodec{
+	codec := &motionJPEGCodec{
 		filePath: path,
-	}, nil
+	}
+	return codec, codec.Decode()
 }

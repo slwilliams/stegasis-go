@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"stegasis/filesystem"
@@ -11,7 +12,11 @@ import (
 )
 
 func main() {
-	codec, _ := video.NewMotionJPEGCodec("")
+	codec, err := video.NewMotionJPEGCodec("")
+	if err != nil {
+		fmt.Printf("Failed to create new motion jpeg codec: %v", err)
+		os.Exit(1)
+	}
 	fs := filesystem.New(codec)
 
 	host := fuse.NewFileSystemHost(fs)
