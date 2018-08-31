@@ -10,20 +10,36 @@ import (
 // images where we can embed data. motionJPEGCodec implements the Codec interface.
 type motionJPEGCodec struct {
 	filePath string
+	opts     MotionJPEGCodecOptions
 	frames   []Frame
+}
+
+// MotionJPEGCodecOptions holds options for the motion jpect codec.
+type MotionJPEGCodecOptions struct {
+	// FrameRate of the input video.
+	FrameRate int
 }
 
 // Decode converts the source video file to a sequence of JPEG images via
 // FFMPEG and stores them in a tempory directory.
 func (c *motionJPEGCodec) Decode() error {
 	tempDir := fmt.Sprintf("%s\\stegasis", os.TempDir())
+	os.RemoveAll(tempDir)
 	if err := os.Mkdir(tempDir, 0777); err != nil {
 		return fmt.Errorf("Failed to create temp directory: %v", err)
 	}
 	outputPattern := fmt.Sprintf("%s\\image-%%d.jpeg", tempDir)
 
-	fmt.Println("Extracting video frames to: %q ...", outputPattern)
-	args := []string{"-v", "quiet", "-stats", "-r", "25", "-i", c.filePath, "-qscale:v", "2", "-f", "image2", outputPattern}
+	fmt.Printf("Extracting video frames from %q to: %q ...\n", c.filePath, outputPattern)
+	args := []string{
+		"-v", "quiet",
+		"-stats",
+		"-r", "25",
+		"-i", c.filePath,
+		"-qscale:v", "2",
+		"-f", "image2",
+		outputPattern,
+	}
 	if err := exec.Command("ffmpeg", args...).Run(); err != nil {
 		return fmt.Errorf("Failed to exec ffmpeg: %v", err)
 	}
@@ -107,9 +123,10 @@ func (f *jpegFrame) IsDirty() bool {
 }
 
 // NewMotionJPEGCodec returns a new motion JPEG codec.
-func NewMotionJPEGCodec(path string) (Codec, error) {
+func NewMotionJPEGCodec(path string, opts MotionJPEGCodecOptions) (Codec, error) {
 	codec := &motionJPEGCodec{
 		filePath: path,
+		opts:     opts,
 	}
 	return codec, codec.Decode()
 }
