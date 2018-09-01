@@ -2,8 +2,11 @@ package video
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
+
+	"stegasis/image/jpeg"
 )
 
 // motionJPEGCodec uses FFMPEG to decode ~any video into a sequence of JPEG
@@ -44,6 +47,27 @@ func (c *motionJPEGCodec) Decode() error {
 		return fmt.Errorf("Failed to exec ffmpeg: %v", err)
 	}
 	fmt.Println("Successfully extracted video frames!")
+
+	// TODO iterate over each JPEG image and decode into Frames and store on c.
+	files, err := ioutil.ReadDir(tempDir)
+	if err != nil {
+		return fmt.Errorf("Failed to read dir %q: %v", tempDir, err)
+	}
+
+	for _, f := range files {
+		r, err := os.Open(tempDir + "\\" + f.Name())
+		if err != nil {
+			return fmt.Errorf("Failed to read file %q: %v", f.Name(), err)
+		}
+
+		_, err = jpeg.Decode(r)
+		if err != nil {
+			return fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
+		}
+
+		// Only do the first one for now.
+		break
+	}
 
 	return nil
 }
