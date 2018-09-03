@@ -45,7 +45,7 @@ var errShortHuffmanData = FormatError("short Huffman data")
 // ensureNBits reads bytes from the byte buffer to ensure that d.bits.n is at
 // least n. For best performance (avoiding function calls inside hot loops),
 // the caller is the one responsible for first checking that d.bits.n < n.
-func (d *decoder) ensureNBits(n int32) error {
+func (d *Decoder) ensureNBits(n int32) error {
 	for {
 		c, err := d.readByteStuffedByte()
 		if err != nil {
@@ -70,7 +70,7 @@ func (d *decoder) ensureNBits(n int32) error {
 
 // receiveExtend is the composition of RECEIVE and EXTEND, specified in section
 // F.2.2.1.
-func (d *decoder) receiveExtend(t uint8) (int32, error) {
+func (d *Decoder) receiveExtend(t uint8) (int32, error) {
 	if d.bits.n < int32(t) {
 		if err := d.ensureNBits(int32(t)); err != nil {
 			return 0, err
@@ -88,7 +88,7 @@ func (d *decoder) receiveExtend(t uint8) (int32, error) {
 
 // processDHT processes a Define Huffman Table marker, and initializes a huffman
 // struct from its contents. Specified in section B.2.4.2.
-func (d *decoder) processDHT(n int) error {
+func (d *Decoder) processDHT(n int) error {
 	for n > 0 {
 		if n < 17 {
 			return FormatError("DHT has wrong length")
@@ -175,7 +175,7 @@ func (d *decoder) processDHT(n int) error {
 
 // decodeHuffman returns the next Huffman-coded value from the bit-stream,
 // decoded according to h.
-func (d *decoder) decodeHuffman(h *huffman) (uint8, error) {
+func (d *Decoder) decodeHuffman(h *huffman) (uint8, error) {
 	if h.nCodes == 0 {
 		return 0, FormatError("uninitialized Huffman table")
 	}
@@ -221,7 +221,7 @@ slowPath:
 	return 0, FormatError("bad Huffman code")
 }
 
-func (d *decoder) decodeBit() (bool, error) {
+func (d *Decoder) decodeBit() (bool, error) {
 	if d.bits.n == 0 {
 		if err := d.ensureNBits(1); err != nil {
 			return false, err
@@ -233,7 +233,7 @@ func (d *decoder) decodeBit() (bool, error) {
 	return ret, nil
 }
 
-func (d *decoder) decodeBits(n int32) (uint32, error) {
+func (d *Decoder) decodeBits(n int32) (uint32, error) {
 	if d.bits.n < n {
 		if err := d.ensureNBits(n); err != nil {
 			return 0, err

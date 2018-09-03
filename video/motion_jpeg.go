@@ -60,7 +60,7 @@ func (c *motionJPEGCodec) Decode() error {
 			return fmt.Errorf("Failed to read file %q: %v", f.Name(), err)
 		}
 
-		_, err = jpeg.Decode(r)
+		_, err = jpeg.DecodeJPEG(r)
 		if err != nil {
 			return fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
 		}

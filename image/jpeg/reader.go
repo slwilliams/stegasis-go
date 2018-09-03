@@ -8,6 +8,7 @@
 package jpeg
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"io"
@@ -41,27 +42,6 @@ const (
 	maxTq   = 3
 
 	maxComponents = 4
-)
-
-const (
-	sof0Marker = 0xc0 // Start Of Frame (Baseline Sequential).
-	sof1Marker = 0xc1 // Start Of Frame (Extended Sequential).
-	sof2Marker = 0xc2 // Start Of Frame (Progressive).
-	dhtMarker  = 0xc4 // Define Huffman Table.
-	rst0Marker = 0xd0 // ReSTart (0).
-	rst7Marker = 0xd7 // ReSTart (7).
-	soiMarker  = 0xd8 // Start Of Image.
-	eoiMarker  = 0xd9 // End Of Image.
-	sosMarker  = 0xda // Start Of Scan.
-	dqtMarker  = 0xdb // Define Quantization Table.
-	driMarker  = 0xdd // Define Restart Interval.
-	comMarker  = 0xfe // COMment.
-	// "APPlication specific" markers aren't part of the JPEG spec per se,
-	// but in practice, their use is described at
-	// https://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html
-	app0Marker  = 0xe0
-	app14Marker = 0xee
-	app15Marker = 0xef
 )
 
 // See https://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/JPEG.html#Adobe
@@ -101,7 +81,7 @@ type bits struct {
 	n int32  // the number of unread bits in a.
 }
 
-type decoder struct {
+type Decoder struct {
 	r    io.Reader
 	bits bits
 	// bytes is a byte buffer, similar to a bufio.Reader, except that it
@@ -146,9 +126,13 @@ type decoder struct {
 	tmp        [2 * blockSize]byte
 }
 
+func (d *Decoder) GetCoeffs() [maxComponents][]block {
+	return d.progCoeffs
+}
+
 // fill fills up the d.bytes.buf buffer from the underlying io.Reader. It
 // should only be called when there are no unread bytes in d.bytes.
-func (d *decoder) fill() error {
+func (d *Decoder) fill() error {
 	if d.bytes.i != d.bytes.j {
 		panic("jpeg: fill called when unread bytes exist")
 	}
@@ -173,7 +157,7 @@ func (d *decoder) fill() error {
 // requires at least 8 bits for look-up, which means that Huffman decoding can
 // sometimes overshoot and read one or two too many bytes. Two-byte overshoot
 // can happen when expecting to read a 0xff 0x00 byte-stuffed byte.
-func (d *decoder) unreadByteStuffedByte() {
+func (d *Decoder) unreadByteStuffedByte() {
 	d.bytes.i -= d.bytes.nUnreadable
 	d.bytes.nUnreadable = 0
 	if d.bits.n >= 8 {
@@ -185,7 +169,7 @@ func (d *decoder) unreadByteStuffedByte() {
 
 // readByte returns the next byte, whether buffered or not buffered. It does
 // not care about byte stuffing.
-func (d *decoder) readByte() (x byte, err error) {
+func (d *Decoder) readByte() (x byte, err error) {
 	for d.bytes.i == d.bytes.j {
 		if err = d.fill(); err != nil {
 			return 0, err
@@ -202,7 +186,7 @@ func (d *decoder) readByte() (x byte, err error) {
 var errMissingFF00 = FormatError("missing 0xff00 sequence")
 
 // readByteStuffedByte is like readByte but is for byte-stuffed Huffman data.
-func (d *decoder) readByteStuffedByte() (x byte, err error) {
+func (d *Decoder) readByteStuffedByte() (x byte, err error) {
 	// Take the fast path if d.bytes.buf contains at least two bytes.
 	if d.bytes.i+2 <= d.bytes.j {
 		x = d.bytes.buf[d.bytes.i]
@@ -243,7 +227,7 @@ func (d *decoder) readByteStuffedByte() (x byte, err error) {
 
 // readFull reads exactly len(p) bytes into p. It does not care about byte
 // stuffing.
-func (d *decoder) readFull(p []byte) error {
+func (d *Decoder) readFull(p []byte) error {
 	// Unread the overshot bytes, if any.
 	if d.bytes.nUnreadable != 0 {
 		if d.bits.n >= 8 {
@@ -270,7 +254,7 @@ func (d *decoder) readFull(p []byte) error {
 }
 
 // ignore ignores the next n bytes.
-func (d *decoder) ignore(n int) error {
+func (d *Decoder) ignore(n int) error {
 	// Unread the overshot bytes, if any.
 	if d.bytes.nUnreadable != 0 {
 		if d.bits.n >= 8 {
@@ -300,7 +284,7 @@ func (d *decoder) ignore(n int) error {
 }
 
 // Specified in section B.2.2.
-func (d *decoder) processSOF(n int) error {
+func (d *Decoder) processSOF(n int) error {
 	if d.nComp != 0 {
 		return FormatError("multiple SOF markers")
 	}
@@ -424,7 +408,7 @@ func (d *decoder) processSOF(n int) error {
 }
 
 // Specified in section B.2.4.1.
-func (d *decoder) processDQT(n int) error {
+func (d *Decoder) processDQT(n int) error {
 loop:
 	for n > 0 {
 		n--
@@ -470,7 +454,7 @@ loop:
 }
 
 // Specified in section B.2.4.4.
-func (d *decoder) processDRI(n int) error {
+func (d *Decoder) processDRI(n int) error {
 	if n != 2 {
 		return FormatError("DRI has wrong length")
 	}
@@ -481,7 +465,7 @@ func (d *decoder) processDRI(n int) error {
 	return nil
 }
 
-func (d *decoder) processApp0Marker(n int) error {
+func (d *Decoder) processApp0Marker(n int) error {
 	if n < 5 {
 		return d.ignore(n)
 	}
@@ -498,7 +482,7 @@ func (d *decoder) processApp0Marker(n int) error {
 	return nil
 }
 
-func (d *decoder) processApp14Marker(n int) error {
+func (d *Decoder) processApp14Marker(n int) error {
 	if n < 12 {
 		return d.ignore(n)
 	}
@@ -519,7 +503,7 @@ func (d *decoder) processApp14Marker(n int) error {
 }
 
 // decode reads a JPEG image from r and returns it as an image.Image.
-func (d *decoder) decode(r io.Reader, configOnly bool) (image.Image, error) {
+func (d *Decoder) decode(r io.Reader, configOnly bool) (image.Image, error) {
 	d.r = r
 
 	// Check for the Start Of Image marker.
@@ -602,6 +586,9 @@ func (d *decoder) decode(r io.Reader, configOnly bool) (image.Image, error) {
 		switch marker {
 		case sof0Marker, sof1Marker, sof2Marker:
 			d.baseline = marker == sof0Marker
+			if d.baseline {
+				fmt.Println("Baseline!!")
+			}
 			d.progressive = marker == sof2Marker
 			err = d.processSOF(n)
 			if configOnly && d.jfif {
@@ -649,6 +636,7 @@ func (d *decoder) decode(r io.Reader, configOnly bool) (image.Image, error) {
 	}
 
 	if d.progressive {
+		fmt.Println("IT IS!!!!!!!!!!!")
 		if err := d.reconstructProgressiveImage(); err != nil {
 			return nil, err
 		}
@@ -674,7 +662,7 @@ func (d *decoder) decode(r io.Reader, configOnly bool) (image.Image, error) {
 // Adobe CMYK JPEG images are inverted, where 255 means no ink instead of full
 // ink, so we apply "v = 255 - v" at various points. Note that a double
 // inversion is a no-op, so inversions might be implicit in the code below.
-func (d *decoder) applyBlack() (image.Image, error) {
+func (d *Decoder) applyBlack() (image.Image, error) {
 	if !d.adobeTransformValid {
 		return nil, UnsupportedError("unknown color model: 4-component JPEG doesn't have Adobe APP14 metadata")
 	}
@@ -739,7 +727,7 @@ func (d *decoder) applyBlack() (image.Image, error) {
 	return img, nil
 }
 
-func (d *decoder) isRGB() bool {
+func (d *Decoder) isRGB() bool {
 	if d.jfif {
 		return false
 	}
@@ -751,7 +739,7 @@ func (d *decoder) isRGB() bool {
 	return d.comp[0].c == 'R' && d.comp[1].c == 'G' && d.comp[2].c == 'B'
 }
 
-func (d *decoder) convertToRGB() (image.Image, error) {
+func (d *Decoder) convertToRGB() (image.Image, error) {
 	cScale := d.comp[0].h / d.comp[1].h
 	bounds := d.img3.Bounds()
 	img := image.NewRGBA(bounds)
@@ -770,15 +758,16 @@ func (d *decoder) convertToRGB() (image.Image, error) {
 }
 
 // Decode reads a JPEG image from r and returns it as an image.Image.
-func Decode(r io.Reader) (image.Image, error) {
-	var d decoder
-	return d.decode(r, false)
+func Decode(r io.Reader) (Decoder, error) {
+	var d Decoder
+	_, err := d.decode(r, false)
+	return d, err
 }
 
 // DecodeConfig returns the color model and dimensions of a JPEG image without
 // decoding the entire image.
 func DecodeConfig(r io.Reader) (image.Config, error) {
-	var d decoder
+	var d Decoder
 	if _, err := d.decode(r, true); err != nil {
 		return image.Config{}, err
 	}
@@ -807,10 +796,6 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 		}, nil
 	}
 	return image.Config{}, FormatError("missing SOF marker")
-}
-
-func init() {
-	image.RegisterFormat("jpeg", "\xff\xd8", Decode, DecodeConfig)
 }
 
 // DrawYCbCr draws the YCbCr source image on the RGBA destination image with

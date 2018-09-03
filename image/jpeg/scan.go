@@ -9,7 +9,7 @@ import (
 )
 
 // makeImg allocates and initializes the destination image.
-func (d *decoder) makeImg(mxx, myy int) {
+func (d *Decoder) makeImg(mxx, myy int) {
 	if d.nComp == 1 {
 		m := image.NewGray(image.Rect(0, 0, 8*mxx, 8*myy))
 		d.img1 = m.SubImage(image.Rect(0, 0, d.width, d.height)).(*image.Gray)
@@ -48,7 +48,7 @@ func (d *decoder) makeImg(mxx, myy int) {
 }
 
 // Specified in section B.2.3.
-func (d *decoder) processSOS(n int) error {
+func (d *Decoder) processSOS(n int) error {
 	if d.nComp == 0 {
 		return FormatError("missing SOF marker")
 	}
@@ -332,7 +332,7 @@ func (d *decoder) processSOS(n int) error {
 
 // refine decodes a successive approximation refinement block, as specified in
 // section G.1.2.
-func (d *decoder) refine(b *block, h *huffman, zigStart, zigEnd, delta int32) error {
+func (d *Decoder) refine(b *block, h *huffman, zigStart, zigEnd, delta int32) error {
 	// Refining a DC component is trivial.
 	if zigStart == 0 {
 		if zigEnd != 0 {
@@ -410,7 +410,7 @@ func (d *decoder) refine(b *block, h *huffman, zigStart, zigEnd, delta int32) er
 
 // refineNonZeroes refines non-zero entries of b in zig-zag order. If nz >= 0,
 // the first nz zero entries are skipped over.
-func (d *decoder) refineNonZeroes(b *block, zig, zigEnd, nz, delta int32) (int32, error) {
+func (d *Decoder) refineNonZeroes(b *block, zig, zigEnd, nz, delta int32) (int32, error) {
 	for ; zig <= zigEnd; zig++ {
 		u := unzig[zig]
 		if b[u] == 0 {
@@ -436,7 +436,7 @@ func (d *decoder) refineNonZeroes(b *block, zig, zigEnd, nz, delta int32) (int32
 	return zig, nil
 }
 
-func (d *decoder) reconstructProgressiveImage() error {
+func (d *Decoder) reconstructProgressiveImage() error {
 	// The h0, mxx, by and bx variables have the same meaning as in the
 	// processSOS method.
 	h0 := d.comp[0].h
@@ -461,7 +461,7 @@ func (d *decoder) reconstructProgressiveImage() error {
 
 // reconstructBlock dequantizes, performs the inverse DCT and stores the block
 // to the image.
-func (d *decoder) reconstructBlock(b *block, bx, by, compIndex int) error {
+func (d *Decoder) reconstructBlock(b *block, bx, by, compIndex int) error {
 	qt := &d.quant[d.comp[compIndex].tq]
 	for zig := 0; zig < blockSize; zig++ {
 		b[unzig[zig]] *= qt[zig]
