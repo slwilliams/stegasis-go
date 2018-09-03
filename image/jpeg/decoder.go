@@ -39,6 +39,7 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 	}
 
 	for {
+		fmt.Println("Top")
 		if _, err := r.Read(buff[:2]); err != nil {
 			return nil, err
 		}
@@ -53,6 +54,7 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 		}
 
 		for marker == 0xff {
+			fmt.Println("strip 0xff")
 			if _, err := r.Read(buff[:1]); err != nil {
 				return nil, err
 			}
@@ -73,14 +75,27 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 
 		switch marker {
 		case sof0Marker:
+			if err := processSOF(r, n, buff); err != nil {
+				return nil, err
+			}
 		case sof1Marker, sof2Marker:
 			return nil, fmt.Errorf("unsupported sof1, sof2 markers")
 		case dhtMarker:
+			if err := processDHT(r, n, buff); err != nil {
+				return nil, err
+			}
 		case dqtMarker:
+			if err := processDQT(r, n, buff); err != nil {
+				return nil, err
+			}
 		case sosMarker:
+			if err := processSOS(r, n, buff); err != nil {
+				return nil, err
+			}
 		case driMarker:
 			return nil, fmt.Errorf("unsupported DRI marker")
 		default:
+			fmt.Println("defatul")
 			if app0Marker <= marker && marker <= app15Marker || marker == comMarker {
 				// ignore n bytes
 				if _, err := r.Read(buff[:n]); err != nil {
@@ -96,4 +111,40 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 
 	fmt.Println("%s", hex.Dump(buff))
 	return nil, nil
+}
+
+func processSOF(r io.Reader, n int, buff []byte) error {
+	fmt.Println("processSOF")
+	if n != (6 + 3*4) {
+		// 3 components.
+		return fmt.Errorf("Only support YCbCr or RGB images")
+	}
+	return nil
+}
+
+func processDQT(r io.Reader, n int, buff []byte) error {
+	fmt.Println("processDQT")
+	// Just ignore since we don't care about this data.
+	if _, err := r.Read(buff[:n]); err != nil {
+		return err
+	}
+	return nil
+}
+
+func processDHT(r io.Reader, n int, buff []byte) error {
+	// I think we need this to decode the SOS where the coefficients are...
+	fmt.Println("processDHT")
+	if _, err := r.Read(buff[:n]); err != nil {
+		return err
+	}
+	return nil
+}
+
+func processSOS(r io.Reader, n int, buff []byte) error {
+	fmt.Println("processSOS")
+	// Ignore for now, but this is where the data actually is.
+	if _, err := r.Read(buff[:n]); err != nil {
+		return err
+	}
+	return nil
 }
