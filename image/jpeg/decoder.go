@@ -32,6 +32,7 @@ type JPEG struct {
 
 	comps [3]component
 	huffs [2][4]*huffman
+	bits  bits
 }
 
 func DecodeJPEG(r io.Reader) (*JPEG, error) {
@@ -274,9 +275,200 @@ func (j *JPEG) processDHT(r io.Reader, n int, buff []byte) error {
 
 func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	fmt.Println("processSOS")
-	// Ignore for now, but this is where the data actually is.
-	if _, err := r.Read(buff[:n]); err != nil {
+
+	if _, err := d.Read(buff[:n]); err != nil {
 		return err
 	}
+	nComp := int(buff[0])
+	if n != 4+2*nComp {
+		return fmt.Errorf("SOS length inconsistent with number of components")
+	}
+	var scan [3]struct {
+		compIndex uint8
+		td        uint8 // DC table selector.
+		ta        uint8 // AC table selector.
+	}
+	totalHV := 0
+	for i := 0; i < nComp; i++ {
+		cs := buff[1+2*i] // Component selector.
+		compIndex := -1
+		for j, comp := range j.comps[:3] {
+			if cs == comp.c {
+				compIndex = j
+			}
+		}
+		if compIndex < 0 {
+			return fmt.Errorf("unknown component selector")
+		}
+		scan[i].compIndex = uint8(compIndex)
+		totalHV += j.comps[compIndex].h * j.comps[compIndex].v
+
+		// The baseline t <= 1 restriction is specified in table B.3.
+		scan[i].td = buff[2+2*i] >> 4
+		if t := scan[i].td; t > maxTh || t > 1 {
+			return FormatError("bad Td value")
+		}
+		scan[i].ta = buff[2+2*i] & 0x0f
+		if t := scan[i].ta; t > maxTh || t > 1 {
+			return FormatError("bad Ta value")
+		}
+	}
+	// zigStart and zigEnd are the spectral selection bounds.
+	// ah and al are the successive approximation high and low values.
+	// The spec calls these values Ss, Se, Ah and Al.
+	//
+	// For sequential JPEGs, these parameters are hard-coded to 0/63/0/0, as
+	// per table B.3.
+	zigStart, zigEnd, ah, al := int32(0), int32(63), uint32(0), uint32(0)
+
+	// mxx and myy are the number of MCUs (Minimum Coded Units) in the image.
+	h0, v0 := j.comps[0].h, j.comps[0].v // The h and v values from the Y components.
+	mxx := (j.width + 8*h0 - 1) / (8 * h0)
+	myy := (j.height + 8*v0 - 1) / (8 * v0)
+
+	j.bits = bits{}
+	mcu, expectedRST := 0, uint8(rst0Marker)
+	var (
+		// b is the decoded coefficients, in natural (not zig-zag) order.
+		b  block
+		dc [3]int32
+		// bx and by are the location of the current block, in units of 8x8
+		// blocks: the third block in the first row has (bx, by) = (2, 0).
+		bx, by     int
+		blockCount int
+		eobRun     uint16
+	)
+	for my := 0; my < myy; my++ {
+		for mx := 0; mx < mxx; mx++ {
+			for i := 0; i < nComp; i++ {
+				compIndex := scan[i].compIndex
+				hi := j.comps[compIndex].h
+				vi := j.comps[compIndex].v
+				for j := 0; j < hi*vi; j++ {
+					// The blocks are traversed one MCU at a time. For 4:2:0 chroma
+					// subsampling, there are four Y 8x8 blocks in every 16x16 MCU.
+					//
+					// For a sequential 32x16 pixel image, the Y blocks visiting order is:
+					//  0 1 4 5
+					//  2 3 6 7
+					//
+					// For progressive images, the interleaved scans (those with nComp > 1)
+					// are traversed as above, but non-interleaved scans are traversed left
+					// to right, top to bottom:
+					//  0 1 2 3
+					//  4 5 6 7
+					// Only DC scans (zigStart == 0) can be interleaved. AC scans must have
+					// only one component.
+					//
+					// To further complicate matters, for non-interleaved scans, there is no
+					// data for any blocks that are inside the image at the MCU level but
+					// outside the image at the pixel level. For example, a 24x16 pixel 4:2:0
+					// progressive image consists of two 16x16 MCUs. The interleaved scans
+					// will process 8 Y blocks:
+					//  0 1 4 5
+					//  2 3 6 7
+					// The non-interleaved scans will process only 6 Y blocks:
+					//  0 1 2
+					//  3 4 5
+					if nComp != 1 {
+						bx = hi*mx + j%hi
+						by = vi*my + j/hi
+					} else {
+						q := mxx * hi
+						bx = blockCount % q
+						by = blockCount / q
+						blockCount++
+						if bx*8 >= j.width || by*8 >= j.height {
+							continue
+						}
+					}
+
+					b = block{}
+					zig := zigStart
+					if zig == 0 {
+						zig++
+						// Decode the DC coefficient, as specified in section F.2.2.1.
+						value, err := d.decodeHuffman(&d.huff[dcTable][scan[i].td])
+						if err != nil {
+							return err
+						}
+						if value > 16 {
+							return UnsupportedError("excessive DC component")
+						}
+						dc[compIndex] = value
+						/*dcDelta, err := d.receiveExtend(value)
+						if err != nil {
+							return err
+						}
+						dc[compIndex] += dcDelta*/
+						b[0] = dc[compIndex]
+					}
+
+					if zig <= zigEnd && eobRun > 0 {
+						eobRun--
+					} else {
+						// Decode the AC coefficients, as specified in section F.2.2.2.
+						huff := &j.huffs[acTable][scan[i].ta]
+						for ; zig <= zigEnd; zig++ {
+							value, err := d.decodeHuffman(huff)
+							if err != nil {
+								return err
+							}
+							val0 := value >> 4
+							val1 := value & 0x0f
+							if val1 != 0 {
+								zig += int32(val0)
+								if zig > zigEnd {
+									break
+								}
+								/*ac, err := d.receiveExtend(val1)
+								if err != nil {
+									return err
+								}*/
+								b[unzig[zig]] = ac
+							} else {
+								if val0 != 0x0f {
+									eobRun = uint16(1 << val0)
+									if val0 != 0 {
+										bits, err := d.decodeBits(int32(val0))
+										if err != nil {
+											return err
+										}
+										eobRun |= uint16(bits)
+									}
+									eobRun--
+									break
+								}
+								zig += 0x0f
+							}
+						}
+					}
+					fmt.Printf("\nBLOCK:\n%v\n", b)
+				} // for j
+			} // for i
+			mcu++
+			if d.ri > 0 && mcu%d.ri == 0 && mcu < mxx*myy {
+				// A more sophisticated decoder could use RST[0-7] markers to resynchronize from corrupt input,
+				// but this one assumes well-formed input, and hence the restart marker follows immediately.
+				if _, err := r.Read(buff[:2]); err != nil {
+					return err
+				}
+				if buff[0] != 0xff || buff[1] != expectedRST {
+					return FormatError("bad RST marker")
+				}
+				expectedRST++
+				if expectedRST == rst7Marker+1 {
+					expectedRST = rst0Marker
+				}
+				// Reset the Huffman decoder.
+				j.bits = bits{}
+				// Reset the DC components, as per section F.2.1.3.1.
+				dc = [maxComponents]int32{}
+				// Reset the progressive decoder state, as per section G.1.2.2.
+				eobRun = 0
+			}
+		} // for mx
+	} // for my
+
 	return nil
 }
