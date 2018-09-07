@@ -126,21 +126,6 @@ func (d *Decoder) processSOS(n int) error {
 	// For sequential JPEGs, these parameters are hard-coded to 0/63/0/0, as
 	// per table B.3.
 	zigStart, zigEnd, ah, al := int32(0), int32(blockSize-1), uint32(0), uint32(0)
-	if d.progressive {
-		zigStart = int32(d.tmp[1+2*nComp])
-		zigEnd = int32(d.tmp[2+2*nComp])
-		ah = uint32(d.tmp[3+2*nComp] >> 4)
-		al = uint32(d.tmp[3+2*nComp] & 0x0f)
-		if (zigStart == 0 && zigEnd != 0) || zigStart > zigEnd || blockSize <= zigEnd {
-			return FormatError("bad spectral selection bounds")
-		}
-		if zigStart != 0 && nComp != 1 {
-			return FormatError("progressive AC coefficients for more than one component")
-		}
-		if ah != 0 && ah != al+1 {
-			return FormatError("bad successive approximation values")
-		}
-	}
 
 	// mxx and myy are the number of MCUs (Minimum Coded Units) in the image.
 	h0, v0 := d.comp[0].h, d.comp[0].v // The h and v values from the Y components.
@@ -148,14 +133,6 @@ func (d *Decoder) processSOS(n int) error {
 	myy := (d.height + 8*v0 - 1) / (8 * v0)
 	if d.img1 == nil && d.img3 == nil {
 		d.makeImg(mxx, myy)
-	}
-	if d.progressive {
-		for i := 0; i < nComp; i++ {
-			compIndex := scan[i].compIndex
-			if d.progCoeffs[compIndex] == nil {
-				d.progCoeffs[compIndex] = make([]block, mxx*myy*d.comp[compIndex].h*d.comp[compIndex].v)
-			}
-		}
 	}
 
 	d.bits = bits{}

@@ -27,6 +27,11 @@ const (
 
 // JPEG holds a JPEG file.
 type JPEG struct {
+	height int
+	width  int
+
+	comps [3]component
+	huffs [2][4]*huffman
 }
 
 func DecodeJPEG(r io.Reader) (*JPEG, error) {
@@ -37,6 +42,8 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 	if buff[0] != 0xff || buff[1] != soiMarker {
 		return nil, fmt.Errorf("missing SOI marker at start of file")
 	}
+
+	j := &JPEG{}
 
 	for {
 		fmt.Println("Top")
@@ -75,21 +82,22 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 
 		switch marker {
 		case sof0Marker:
-			if err := processSOF(r, n, buff); err != nil {
+			// This is baseline, non-progressive.
+			if err := j.processSOF(r, n, buff); err != nil {
 				return nil, err
 			}
 		case sof1Marker, sof2Marker:
 			return nil, fmt.Errorf("unsupported sof1, sof2 markers")
 		case dhtMarker:
-			if err := processDHT(r, n, buff); err != nil {
+			if err := j.processDHT(r, n, buff); err != nil {
 				return nil, err
 			}
 		case dqtMarker:
-			if err := processDQT(r, n, buff); err != nil {
+			if err := j.processDQT(r, n, buff); err != nil {
 				return nil, err
 			}
 		case sosMarker:
-			if err := processSOS(r, n, buff); err != nil {
+			if err := j.processSOS(r, n, buff); err != nil {
 				return nil, err
 			}
 		case driMarker:
@@ -110,19 +118,62 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 	}
 
 	fmt.Println("%s", hex.Dump(buff))
-	return nil, nil
+	return j, nil
 }
 
-func processSOF(r io.Reader, n int, buff []byte) error {
+// Component specification, specified in section B.2.2.
+type component struct {
+	h  int   // Horizontal sampling factor.
+	v  int   // Vertical sampling factor.
+	c  uint8 // Component identifier.
+	tq uint8 // Quantization table destination selector.
+}
+
+func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
 	fmt.Println("processSOF")
-	if n != (6 + 3*4) {
+	if n != (6 + 3*3) {
 		// 3 components.
-		return fmt.Errorf("Only support YCbCr or RGB images")
+		return fmt.Errorf("Only support YCbCr / RGB images")
 	}
+	if _, err := r.Read(buff[:n]); err != nil {
+		return err
+	}
+	// We only support 8-bit precision.
+	if buff[0] != 8 {
+		return fmt.Errorf("Only support 8-but precision")
+	}
+	height := int(buff[1])<<8 + int(buff[2])
+	width := int(buff[3])<<8 + int(buff[4])
+	fmt.Printf("height: %d, width: %d\n", height, width)
+	if int(buff[5]) != 3 {
+		return fmt.Errorf("SOF has wrong length")
+	}
+
+	comps := [3]component{}
+
+	for i := 0; i < 3; i++ {
+		comp := component{}
+		comp.c = buff[6+3*i]
+		comp.tq = buff[8+3*i]
+
+		hv := buff[7+3*i]
+		h, v := int(hv>>4), int(hv&0x0f)
+
+		comp.h = h
+		comp.v = v
+
+		comps[i] = comp
+	}
+
+	fmt.Printf("%+v\n", comps)
+
+	j.height = height
+	j.width = width
+	j.comps = comps
 	return nil
 }
 
-func processDQT(r io.Reader, n int, buff []byte) error {
+func (j *JPEG) processDQT(r io.Reader, n int, buff []byte) error {
 	fmt.Println("processDQT")
 	// Just ignore since we don't care about this data.
 	if _, err := r.Read(buff[:n]); err != nil {
@@ -131,16 +182,97 @@ func processDQT(r io.Reader, n int, buff []byte) error {
 	return nil
 }
 
-func processDHT(r io.Reader, n int, buff []byte) error {
-	// I think we need this to decode the SOS where the coefficients are...
+func (j *JPEG) processDHT(r io.Reader, n int, buff []byte) error {
 	fmt.Println("processDHT")
-	if _, err := r.Read(buff[:n]); err != nil {
-		return err
+
+	for n > 0 {
+		if n < 17 {
+			return fmt.Errorf("DHT has wrong length")
+		}
+		if _, err := r.Read(buff[:17]); err != nil {
+			return err
+		}
+		tc := buff[0] >> 4
+		if tc > maxTc {
+			return fmt.Errorf("bad Tc value")
+		}
+		th := buff[0] & 0x0f
+		if th > 1 {
+			return fmt.Errorf("bad Th value")
+		}
+		h := huffman{}
+
+		// Read nCodes and h.vals (and derive h.nCodes).
+		// nCodes[i] is the number of codes with code length i.
+		// h.nCodes is the total number of codes.
+		h.nCodes = 0
+		var nCodes [maxCodeLength]int32
+		for i := range nCodes {
+			nCodes[i] = int32(buff[i+1])
+			h.nCodes += nCodes[i]
+		}
+		if h.nCodes == 0 {
+			return fmt.Errorf("Huffman table has zero length")
+		}
+		if h.nCodes > maxNCodes {
+			return fmt.Errorf("Huffman table has excessive length")
+		}
+		n -= int(h.nCodes) + 17
+		if n < 0 {
+			return fmt.Errorf("DHT has wrong length")
+		}
+		if _, err := r.Read(h.vals[:h.nCodes]); err != nil {
+			return err
+		}
+
+		// Derive the look-up table.
+		for i := range h.lut {
+			h.lut[i] = 0
+		}
+		var x, code uint32
+		for i := uint32(0); i < lutSize; i++ {
+			code <<= 1
+			for j := int32(0); j < nCodes[i]; j++ {
+				// The codeLength is 1+i, so shift code by 8-(1+i) to
+				// calculate the high bits for every 8-bit sequence
+				// whose codeLength's high bits matches code.
+				// The high 8 bits of lutValue are the encoded value.
+				// The low 8 bits are 1 plus the codeLength.
+				base := uint8(code << (7 - i))
+				lutValue := uint16(h.vals[x])<<8 | uint16(2+i)
+				for k := uint8(0); k < 1<<(7-i); k++ {
+					h.lut[base|k] = lutValue
+				}
+				code++
+				x++
+			}
+		}
+
+		// Derive minCodes, maxCodes, and valsIndices.
+		var c, index int32
+		for i, n := range nCodes {
+			if n == 0 {
+				h.minCodes[i] = -1
+				h.maxCodes[i] = -1
+				h.valsIndices[i] = -1
+			} else {
+				h.minCodes[i] = c
+				h.maxCodes[i] = c + n - 1
+				h.valsIndices[i] = index
+				c += n
+				index += n
+			}
+			c <<= 1
+		}
+
+		j.huffs[tc][th] = &h
+		fmt.Printf("\n%+v\n", h)
 	}
+
 	return nil
 }
 
-func processSOS(r io.Reader, n int, buff []byte) error {
+func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	fmt.Println("processSOS")
 	// Ignore for now, but this is where the data actually is.
 	if _, err := r.Read(buff[:n]); err != nil {
