@@ -3,6 +3,7 @@ package jpeg
 
 import (
 	//	"encoding/hex"
+	"bufio"
 	"fmt"
 	"io"
 )
@@ -46,6 +47,11 @@ type JPEG struct {
 	// The actual DCT coefficients we embed in.
 	blocks []block
 	dirty  bool
+
+	// Encoding related fields
+
+	// quant is the scaled quantization tables, in zig-zag order.
+	quant [nQuantIndex][blockSize]byte
 }
 
 // Size returns the total number of DCT coefficients in all blocks.
@@ -667,4 +673,86 @@ func (j *JPEG) decodeHuffman(r io.Reader, h *huffman) (uint8, error) {
 		code <<= 1
 	}
 	return 0, fmt.Errorf("bad Huffman code")
+}
+
+// Encode encodes the current JPEG data and writes it out as a jpeg file via the
+// provided writer.
+func (jp *JPEG) Encode(w io.Writer) error {
+	bw := bufio.NewWriter(w)
+	buff := make([]byte, 1024)
+
+	// Write the Start Of Image marker.
+	buff[0] = 0xff
+	buff[1] = 0xd8
+	bw.Write(buff[:2])
+
+	for i := range jp.quant {
+		for j := range jp.quant[i] {
+			/*x := int(unscaledQuant[i][j])
+			  x = (x*scale + 50) / 100
+			  if x < 1 {
+			    x = 1
+			  } else if x > 255 {
+			    x = 255
+			  }*/
+			jp.quant[i][j] = uint8(1)
+		}
+	}
+
+	// Write the quantization tables.
+	markerlen := 2 + int(nQuantIndex)*(1+blockSize)
+	writeMarkerHeader(bw, dqtMarker, markerlen, buff)
+	for i := range jp.quant {
+		bw.WriteByte(uint8(i))
+		bw.Write(jp.quant[i][:])
+	}
+
+	// Write the image dimensions.
+	markerlen = 8 + 3*3
+	writeMarkerHeader(bw, sof0Marker, markerlen, buff)
+	buff[0] = 8 // 8-bit color.
+	buff[1] = uint8(jp.height >> 8)
+	buff[2] = uint8(jp.height & 0xff)
+	buff[3] = uint8(jp.width >> 8)
+	buff[4] = uint8(jp.width & 0xff)
+	buff[5] = uint8(3)
+	for i := 0; i < 3; i++ {
+		buff[3*i+6] = uint8(i + 1)
+		// We use 4:2:0 chroma subsampling.
+		buff[3*i+7] = "\x22\x11\x11"[i]
+		buff[3*i+8] = "\x00\x01\x01"[i]
+	}
+
+	bw.Write(buff[:3*(3-1)+9])
+
+	// Write the Huffman tables.
+	markerlen = 2
+	specs := theHuffmanSpec[:]
+	for _, s := range specs {
+		markerlen += 1 + 16 + len(s.value)
+	}
+	writeMarkerHeader(bw, dhtMarker, markerlen, buff)
+	for i, s := range specs {
+		bw.WriteByte("\x00\x10\x01\x11"[i])
+		bw.Write(s.count[:])
+		bw.Write(s.value)
+	}
+
+	/*	// Write the image data.
+		e.writeSOS(m)
+		// Write the End Of Image marker.
+		e.buf[0] = 0xff
+		e.buf[1] = 0xd9
+		e.write(e.buf[:2])
+		e.flush()
+		return e.err*/
+	return nil
+}
+
+func writeMarkerHeader(bw *bufio.Writer, marker uint8, markerlen int, buff []byte) {
+	buff[0] = 0xff
+	buff[1] = marker
+	buff[2] = uint8(markerlen >> 8)
+	buff[3] = uint8(markerlen & 0xff)
+	bw.Write(buff[:4])
 }
