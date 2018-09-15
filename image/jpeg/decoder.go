@@ -2,7 +2,7 @@
 package jpeg
 
 import (
-	"encoding/hex"
+	//	"encoding/hex"
 	"fmt"
 	"io"
 )
@@ -29,6 +29,7 @@ const (
 type JPEG struct {
 	height int
 	width  int
+	ri     int
 
 	comps [3]component
 	huffs [2][4]*huffman
@@ -102,7 +103,9 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 				return nil, err
 			}
 		case driMarker:
-			return nil, fmt.Errorf("unsupported DRI marker")
+			if err := j.processDRI(r, n, buff); err != nil {
+				return nil, err
+			}
 		default:
 			fmt.Println("defatul")
 			if app0Marker <= marker && marker <= app15Marker || marker == comMarker {
@@ -118,8 +121,19 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 		}
 	}
 
-	fmt.Println("%s", hex.Dump(buff))
 	return j, nil
+}
+
+// Specified in section B.2.4.4.
+func (j *JPEG) processDRI(r io.Reader, n int, buff []byte) error {
+	if n != 2 {
+		return fmt.Errorf("DRI has wrong length")
+	}
+	if _, err := r.Read(buff[:2]); err != nil {
+		return err
+	}
+	j.ri = int(buff[0])<<8 + int(buff[1])
+	return nil
 }
 
 // Component specification, specified in section B.2.2.
@@ -273,10 +287,33 @@ func (j *JPEG) processDHT(r io.Reader, n int, buff []byte) error {
 	return nil
 }
 
-func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
+// ensureNBits reads bytes from the byte buffer to ensure that d.bits.n is at
+// least n. For best performance (avoiding function calls inside hot loops),
+// the caller is the one responsible for first checking that d.bits.n < n.
+func (j *JPEG) ensureNBits(r io.Reader, n int32) error {
+	for {
+		c, err := j.readByteStuffedByte(r)
+		if err != nil {
+			return err
+		}
+		j.bits.a = j.bits.a<<8 | uint32(c)
+		j.bits.n += 8
+		if j.bits.m == 0 {
+			j.bits.m = 1 << 7
+		} else {
+			j.bits.m <<= 8
+		}
+		if j.bits.n >= n {
+			break
+		}
+	}
+	return nil
+}
+
+func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	fmt.Println("processSOS")
 
-	if _, err := d.Read(buff[:n]); err != nil {
+	if _, err := r.Read(buff[:n]); err != nil {
 		return err
 	}
 	nComp := int(buff[0])
@@ -292,7 +329,7 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	for i := 0; i < nComp; i++ {
 		cs := buff[1+2*i] // Component selector.
 		compIndex := -1
-		for j, comp := range j.comps[:3] {
+		for j, comp := range jp.comps[:3] {
 			if cs == comp.c {
 				compIndex = j
 			}
@@ -301,7 +338,7 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 			return fmt.Errorf("unknown component selector")
 		}
 		scan[i].compIndex = uint8(compIndex)
-		totalHV += j.comps[compIndex].h * j.comps[compIndex].v
+		totalHV += jp.comps[compIndex].h * jp.comps[compIndex].v
 
 		// The baseline t <= 1 restriction is specified in table B.3.
 		scan[i].td = buff[2+2*i] >> 4
@@ -319,19 +356,19 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	//
 	// For sequential JPEGs, these parameters are hard-coded to 0/63/0/0, as
 	// per table B.3.
-	zigStart, zigEnd, ah, al := int32(0), int32(63), uint32(0), uint32(0)
+	zigStart, zigEnd := int32(0), int32(63)
 
 	// mxx and myy are the number of MCUs (Minimum Coded Units) in the image.
-	h0, v0 := j.comps[0].h, j.comps[0].v // The h and v values from the Y components.
-	mxx := (j.width + 8*h0 - 1) / (8 * h0)
-	myy := (j.height + 8*v0 - 1) / (8 * v0)
+	h0, v0 := jp.comps[0].h, jp.comps[0].v // The h and v values from the Y components.
+	mxx := (jp.width + 8*h0 - 1) / (8 * h0)
+	myy := (jp.height + 8*v0 - 1) / (8 * v0)
 
-	j.bits = bits{}
+	jp.bits = bits{}
 	mcu, expectedRST := 0, uint8(rst0Marker)
 	var (
 		// b is the decoded coefficients, in natural (not zig-zag) order.
-		b  block
-		dc [3]int32
+		b block
+		//dc [3]int32
 		// bx and by are the location of the current block, in units of 8x8
 		// blocks: the third block in the first row has (bx, by) = (2, 0).
 		bx, by     int
@@ -342,8 +379,8 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 		for mx := 0; mx < mxx; mx++ {
 			for i := 0; i < nComp; i++ {
 				compIndex := scan[i].compIndex
-				hi := j.comps[compIndex].h
-				vi := j.comps[compIndex].v
+				hi := jp.comps[compIndex].h
+				vi := jp.comps[compIndex].v
 				for j := 0; j < hi*vi; j++ {
 					// The blocks are traversed one MCU at a time. For 4:2:0 chroma
 					// subsampling, there are four Y 8x8 blocks in every 16x16 MCU.
@@ -378,7 +415,7 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 						bx = blockCount % q
 						by = blockCount / q
 						blockCount++
-						if bx*8 >= j.width || by*8 >= j.height {
+						if bx*8 >= jp.width || by*8 >= jp.height {
 							continue
 						}
 					}
@@ -388,29 +425,29 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 					if zig == 0 {
 						zig++
 						// Decode the DC coefficient, as specified in section F.2.2.1.
-						value, err := d.decodeHuffman(&d.huff[dcTable][scan[i].td])
+						value, err := jp.decodeHuffman(r, jp.huffs[dcTable][scan[i].td])
 						if err != nil {
 							return err
 						}
 						if value > 16 {
-							return UnsupportedError("excessive DC component")
+							return fmt.Errorf("excessive DC component")
 						}
-						dc[compIndex] = value
-						/*dcDelta, err := d.receiveExtend(value)
+						//dc[compIndex] = value
+						_, err = jp.receiveExtend(r, value)
 						if err != nil {
 							return err
 						}
-						dc[compIndex] += dcDelta*/
-						b[0] = dc[compIndex]
+						//dc[compIndex] += dcDelta
+						b[0] = int32(value)
 					}
 
 					if zig <= zigEnd && eobRun > 0 {
 						eobRun--
 					} else {
 						// Decode the AC coefficients, as specified in section F.2.2.2.
-						huff := &j.huffs[acTable][scan[i].ta]
+						huff := jp.huffs[acTable][scan[i].ta]
 						for ; zig <= zigEnd; zig++ {
-							value, err := d.decodeHuffman(huff)
+							value, err := jp.decodeHuffman(r, huff)
 							if err != nil {
 								return err
 							}
@@ -421,16 +458,16 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 								if zig > zigEnd {
 									break
 								}
-								/*ac, err := d.receiveExtend(val1)
+								_, err = jp.receiveExtend(r, val1)
 								if err != nil {
 									return err
-								}*/
-								b[unzig[zig]] = ac
+								}
+								b[unzig[zig]] = int32(val1)
 							} else {
 								if val0 != 0x0f {
 									eobRun = uint16(1 << val0)
 									if val0 != 0 {
-										bits, err := d.decodeBits(int32(val0))
+										bits, err := jp.decodeBits(r, int32(val0))
 										if err != nil {
 											return err
 										}
@@ -447,23 +484,23 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 				} // for j
 			} // for i
 			mcu++
-			if d.ri > 0 && mcu%d.ri == 0 && mcu < mxx*myy {
+			if jp.ri > 0 && mcu%jp.ri == 0 && mcu < mxx*myy {
 				// A more sophisticated decoder could use RST[0-7] markers to resynchronize from corrupt input,
 				// but this one assumes well-formed input, and hence the restart marker follows immediately.
 				if _, err := r.Read(buff[:2]); err != nil {
 					return err
 				}
 				if buff[0] != 0xff || buff[1] != expectedRST {
-					return FormatError("bad RST marker")
+					return fmt.Errorf("bad RST marker")
 				}
 				expectedRST++
 				if expectedRST == rst7Marker+1 {
 					expectedRST = rst0Marker
 				}
 				// Reset the Huffman decoder.
-				j.bits = bits{}
+				jp.bits = bits{}
 				// Reset the DC components, as per section F.2.1.3.1.
-				dc = [maxComponents]int32{}
+				//dc = [3]int32{}
 				// Reset the progressive decoder state, as per section G.1.2.2.
 				eobRun = 0
 			}
@@ -471,4 +508,124 @@ func (j *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	} // for my
 
 	return nil
+}
+
+func (j *JPEG) receiveExtend(r io.Reader, t uint8) (int32, error) {
+	if j.bits.n < int32(t) {
+		if err := j.ensureNBits(r, int32(t)); err != nil {
+			return 0, err
+		}
+	}
+	j.bits.n -= int32(t)
+	j.bits.m >>= t
+	s := int32(1) << t
+	x := int32(j.bits.a>>uint8(j.bits.n)) & (s - 1)
+	if x < s>>1 {
+		x += ((-1) << t) + 1
+	}
+	return x, nil
+}
+
+// readByteStuffedByte is like readByte but is for byte-stuffed Huffman data.
+func (j *JPEG) readByteStuffedByte(r io.Reader) (byte, error) {
+	// Take the fast path if d.bytes.buf contains at least two bytes.
+	/*if d.bytes.i+2 <= d.bytes.j {
+	  x = d.bytes.buf[d.bytes.i]
+	  d.bytes.i++
+	  d.bytes.nUnreadable = 1
+	  if x != 0xff {
+	    return x, err
+	  }
+	  if d.bytes.buf[d.bytes.i] != 0x00 {
+	    return 0, errMissingFF00
+	  }
+	  d.bytes.i++
+	  d.bytes.nUnreadable = 2
+	  return 0xff, nil
+	}*/
+
+	//d.bytes.nUnreadable = 0
+
+	tmp := make([]byte, 1, 1)
+	_, err := r.Read(tmp)
+	x := tmp[0]
+	if err != nil {
+		return 0, err
+	}
+	//d.bytes.nUnreadable = 1
+	if x != 0xff {
+		return x, nil
+	}
+
+	_, err = r.Read(tmp)
+	x = tmp[0]
+	if err != nil {
+		return 0, err
+	}
+	//d.bytes.nUnreadable = 2
+	if x != 0x00 {
+		return 0, fmt.Errorf("missing 0xff00 sequence")
+	}
+	return 0xff, nil
+}
+
+func (j *JPEG) decodeBits(r io.Reader, n int32) (uint32, error) {
+	if j.bits.n < n {
+		if err := j.ensureNBits(r, n); err != nil {
+			return 0, err
+		}
+	}
+	ret := j.bits.a >> uint32(j.bits.n-n)
+	ret &= (1 << uint32(n)) - 1
+	j.bits.n -= n
+	j.bits.m >>= uint32(n)
+	return ret, nil
+}
+
+// decodeHuffman returns the next Huffman-coded value from the bit-stream,
+// decoded according to h.
+func (j *JPEG) decodeHuffman(r io.Reader, h *huffman) (uint8, error) {
+	if h.nCodes == 0 {
+		return 0, fmt.Errorf("uninitialized Huffman table")
+	}
+
+	/*if d.bits.n < 8 {
+	    if err := d.ensureNBits(8); err != nil {
+	      if err != errMissingFF00 && err != errShortHuffmanData {
+	        return 0, err
+	      }
+	      // There are no more bytes of data in this segment, but we may still
+	      // be able to read the next symbol out of the previously read bits.
+	      // First, undo the readByte that the ensureNBits call made.
+	      if d.bytes.nUnreadable != 0 {
+	        d.unreadByteStuffedByte()
+	      }
+	      goto slowPath
+	    }
+	  }
+	  if v := h.lut[(d.bits.a>>uint32(d.bits.n-lutSize))&0xff]; v != 0 {
+	    n := (v & 0xff) - 1
+	    d.bits.n -= int32(n)
+	    d.bits.m >>= n
+	    return uint8(v >> 8), nil
+	  }*/
+
+	//slowPath:
+	for i, code := 0, int32(0); i < maxCodeLength; i++ {
+		if j.bits.n == 0 {
+			if err := j.ensureNBits(r, 1); err != nil {
+				return 0, err
+			}
+		}
+		if j.bits.a&j.bits.m != 0 {
+			code |= 1
+		}
+		j.bits.n--
+		j.bits.m >>= 1
+		if code <= h.maxCodes[i] {
+			return h.vals[h.valsIndices[i]+code-h.minCodes[i]], nil
+		}
+		code <<= 1
+	}
+	return 0, fmt.Errorf("bad Huffman code")
 }
