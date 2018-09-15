@@ -98,7 +98,7 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 	j := &JPEG{}
 
 	for {
-		fmt.Println("Top")
+		//fmt.Println("Top")
 		if _, err := r.Read(buff[:2]); err != nil {
 			return nil, err
 		}
@@ -113,7 +113,7 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 		}
 
 		for marker == 0xff {
-			fmt.Println("strip 0xff")
+			//fmt.Println("strip 0xff")
 			if _, err := r.Read(buff[:1]); err != nil {
 				return nil, err
 			}
@@ -185,7 +185,7 @@ func (j *JPEG) processDRI(r io.Reader, n int, buff []byte) error {
 }
 
 func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
-	fmt.Println("processSOF")
+	//fmt.Println("processSOF")
 	if n != (6 + 3*3) {
 		// 3 components.
 		return fmt.Errorf("Only support YCbCr / RGB images")
@@ -199,7 +199,7 @@ func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
 	}
 	height := int(buff[1])<<8 + int(buff[2])
 	width := int(buff[3])<<8 + int(buff[4])
-	fmt.Printf("height: %d, width: %d\n", height, width)
+	//fmt.Printf("height: %d, width: %d\n", height, width)
 	if int(buff[5]) != 3 {
 		return fmt.Errorf("SOF has wrong length")
 	}
@@ -220,7 +220,7 @@ func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
 		comps[i] = comp
 	}
 
-	fmt.Printf("%+v\n", comps)
+	//fmt.Printf("%+v\n", comps)
 
 	j.height = height
 	j.width = width
@@ -229,7 +229,7 @@ func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
 }
 
 func (j *JPEG) processDQT(r io.Reader, n int, buff []byte) error {
-	fmt.Println("processDQT")
+	//fmt.Println("processDQT")
 	// Just ignore since we don't care about this data.
 	if _, err := r.Read(buff[:n]); err != nil {
 		return err
@@ -238,7 +238,7 @@ func (j *JPEG) processDQT(r io.Reader, n int, buff []byte) error {
 }
 
 func (j *JPEG) processDHT(r io.Reader, n int, buff []byte) error {
-	fmt.Println("processDHT")
+	//fmt.Println("processDHT")
 
 	for n > 0 {
 		if n < 17 {
@@ -321,7 +321,6 @@ func (j *JPEG) processDHT(r io.Reader, n int, buff []byte) error {
 		}
 
 		j.huffs[tc][th] = &h
-		fmt.Printf("\n%+v\n", h)
 	}
 
 	return nil
@@ -351,7 +350,7 @@ func (j *JPEG) ensureNBits(r io.Reader, n int32) error {
 }
 
 func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
-	fmt.Println("processSOS")
+	//fmt.Println("processSOS")
 
 	if _, err := r.Read(buff[:n]); err != nil {
 		return err

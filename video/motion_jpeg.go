@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"sync"
+	"time"
 
 	"stegasis/image/jpeg"
 )
@@ -53,20 +55,49 @@ func (c *motionJPEGCodec) Decode() error {
 		return fmt.Errorf("Failed to read dir %q: %v", tempDir, err)
 	}
 
-	for _, f := range files {
-		r, err := os.Open(tempDir + "\\" + f.Name())
-		if err != nil {
-			return fmt.Errorf("Failed to read file %q: %v", f.Name(), err)
-		}
+	fmt.Println("Decoding frame data...")
+	now := time.Now()
+	var (
+		wg        sync.WaitGroup
+		mux       sync.Mutex
+		decodeErr error
+	)
+	frames := map[int]Frame{}
+	for i, f := range files {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			i := i
+			f := f
 
-		j, err := jpeg.DecodeJPEG(r)
-		if err != nil {
-			return fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
-		}
+			r, err := os.Open(tempDir + "\\" + f.Name())
+			if err != nil {
+				decodeErr = fmt.Errorf("Failed to read file %q: %v", f.Name(), err)
+				return
+			}
 
-		c.frames = append(c.frames, j)
+			j, err := jpeg.DecodeJPEG(r)
+			if err != nil {
+				decodeErr = fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
+				return
+			}
+
+			mux.Lock()
+			frames[i] = j
+			mux.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	if decodeErr != nil {
+		return decodeErr
 	}
 
+	for _, f := range frames {
+		c.frames = append(c.frames, f)
+	}
+
+	fmt.Printf("Finished decoding frame data. Took: %s\n", time.Since(now))
 	return nil
 }
 
