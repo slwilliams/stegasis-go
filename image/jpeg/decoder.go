@@ -413,8 +413,8 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 	mcu, expectedRST := 0, uint8(rst0Marker)
 	var (
 		// b is the decoded coefficients, in natural (not zig-zag) order.
-		b block
-		//dc [3]int32
+		b  block
+		dc [3]int32
 		// bx and by are the location of the current block, in units of 8x8
 		// blocks: the third block in the first row has (bx, by) = (2, 0).
 		bx, by     int
@@ -478,13 +478,12 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 						if value > 16 {
 							return fmt.Errorf("excessive DC component")
 						}
-						//dc[compIndex] = value
-						_, err = jp.receiveExtend(r, value)
+						dcDelta, err := jp.receiveExtend(r, value)
 						if err != nil {
 							return err
 						}
-						//dc[compIndex] += dcDelta
-						b[0] = int32(value)
+						dc[compIndex] += dcDelta
+						b[0] = dc[compIndex]
 					}
 
 					if zig <= zigEnd && eobRun > 0 {
@@ -504,11 +503,11 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 								if zig > zigEnd {
 									break
 								}
-								_, err = jp.receiveExtend(r, val1)
+								ac, err := jp.receiveExtend(r, val1)
 								if err != nil {
 									return err
 								}
-								b[unzig[zig]] = int32(val1)
+								b[unzig[zig]] = ac
 							} else {
 								if val0 != 0x0f {
 									eobRun = uint16(1 << val0)
@@ -546,7 +545,7 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 				// Reset the Huffman decoder.
 				jp.bits = bits{}
 				// Reset the DC components, as per section F.2.1.3.1.
-				//dc = [3]int32{}
+				dc = [3]int32{}
 				// Reset the progressive decoder state, as per section G.1.2.2.
 				eobRun = 0
 			}
@@ -743,15 +742,26 @@ func (jp *JPEG) Encode(w io.Writer) error {
 	bw.Write(sosHeaderYCbCr)
 
 	var prevDCY, prevDCCb, prevDCCr int32
-	for i, b := range jp.blocks {
-		if i == 0 || i == 1 || i == 2 || i == 3 {
+	var count, blockType int
+	for _, b := range jp.blocks {
+		if blockType == 0 && count < 4 {
 			prevDCY = jp.writeBlock(bw, &b, 0, prevDCY)
+			count++
+			if count == 4 {
+				blockType = 1
+				count = 0
+			}
+			continue
 		}
-		if i == 4 {
+		if blockType == 1 {
 			prevDCCb = jp.writeBlock(bw, &b, 1, prevDCCb)
+			blockType = 2
+			continue
 		}
-		if i == 5 {
+		if blockType == 2 {
 			prevDCCr = jp.writeBlock(bw, &b, 1, prevDCCr)
+			blockType = 0
+			continue
 		}
 	}
 	jp.emit(bw, 0x7f, 7)
@@ -789,12 +799,15 @@ func (j *JPEG) emit(bw *bufio.Writer, bits, nBits uint32) {
 
 func (jp *JPEG) writeBlock(bw *bufio.Writer, b *block, q quantIndex, prevDC int32) int32 {
 	// Emit the DC delta.
-	dc := div(b[0], 8*int32(jp.quant[q][0]))
+	//dc := div(b[0], 8*int32(jp.quant[q][0]))
+	dc := b[0]
 	jp.emitHuffRLE(bw, huffIndex(2*q+0), 0, dc-prevDC)
 	// Emit the AC components.
 	h, runLength := huffIndex(2*q+1), int32(0)
 	for zig := 1; zig < blockSize; zig++ {
-		ac := div(b[unzig[zig]], 8*int32(jp.quant[q][zig]))
+		//ac := div(b[unzig[zig]], 8*int32(jp.quant[q][zig]))
+		ac := b[unzig[zig]]
+		//ac := b[zig]
 		if ac == 0 {
 			runLength++
 		} else {
