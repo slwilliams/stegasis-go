@@ -25,7 +25,15 @@ const (
 	app15Marker = 0xef
 )
 
-// JPEG holds a JPEG file.
+// Component specification, specified in section B.2.2.
+type component struct {
+	h  int   // Horizontal sampling factor.
+	v  int   // Vertical sampling factor.
+	c  uint8 // Component identifier.
+	tq uint8 // Quantization table destination selector.
+}
+
+// JPEG holds a JPEG file and implements thr Frame interface.
 type JPEG struct {
 	height int
 	width  int
@@ -34,8 +42,50 @@ type JPEG struct {
 	comps [3]component
 	huffs [2][4]*huffman
 	bits  bits
+
+	// The actual DCT coefficients we embed in.
+	blocks []block
+	dirty  bool
 }
 
+// Size returns the total number of DCT coefficients in all blocks.
+func (j *JPEG) Size() int {
+	return len(j.blocks) * 64
+}
+
+// GetElement returns the ith DCT coefficient.
+func (j *JPEG) GetElement(i int) int {
+	if i < 0 {
+		panic(fmt.Errorf("JPEG GetElement i < 0: %d", i))
+	}
+	if i >= j.Size() {
+		panic(fmt.Errorf("JPEG GetElement i >= Size(). Size: %d, i: %d", j.Size(), i))
+	}
+
+	return (int)(j.blocks[i/64][i%64])
+
+	panic(fmt.Errorf("Reached bottom of GetElement, this should never happen"))
+}
+
+// SetElement sets the ith DCT coefficient to val.
+func (j *JPEG) SetElement(i, val int) {
+	if i < 0 {
+		panic(fmt.Errorf("JPEG GetElement i < 0: %d", i))
+	}
+	if i >= j.Size() {
+		panic(fmt.Errorf("JPEG GetElement i >= Size(). Size: %d, i: %d", j.Size(), i))
+	}
+
+	j.blocks[i/64][i%64] = (int32)(val)
+	j.dirty = true
+}
+
+func (j *JPEG) IsDirty() bool {
+	return j.dirty
+}
+
+// DecodeJPEG attempts to decode the given reader as JPEG data giving access to
+// the raw DCT coefficients.
 func DecodeJPEG(r io.Reader) (*JPEG, error) {
 	buff := make([]byte, 1024)
 	if _, err := r.Read(buff[:2]); err != nil {
@@ -107,13 +157,12 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 				return nil, err
 			}
 		default:
-			fmt.Println("defatul")
 			if app0Marker <= marker && marker <= app15Marker || marker == comMarker {
 				// ignore n bytes
 				if _, err := r.Read(buff[:n]); err != nil {
 					return nil, err
 				}
-			} else if marker < 0xc0 { // See Table B.1 "Marker code assignments".
+			} else if marker < 0xc0 {
 				return nil, fmt.Errorf("unknown marker: %02x", marker)
 			} else {
 				return nil, fmt.Errorf("bad marker: %02x", marker)
@@ -124,7 +173,6 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 	return j, nil
 }
 
-// Specified in section B.2.4.4.
 func (j *JPEG) processDRI(r io.Reader, n int, buff []byte) error {
 	if n != 2 {
 		return fmt.Errorf("DRI has wrong length")
@@ -134,14 +182,6 @@ func (j *JPEG) processDRI(r io.Reader, n int, buff []byte) error {
 	}
 	j.ri = int(buff[0])<<8 + int(buff[1])
 	return nil
-}
-
-// Component specification, specified in section B.2.2.
-type component struct {
-	h  int   // Horizontal sampling factor.
-	v  int   // Vertical sampling factor.
-	c  uint8 // Component identifier.
-	tq uint8 // Quantization table destination selector.
 }
 
 func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
@@ -480,7 +520,7 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 							}
 						}
 					}
-					fmt.Printf("\nBLOCK:\n%v\n", b)
+					jp.blocks = append(jp.blocks, b)
 				} // for j
 			} // for i
 			mcu++

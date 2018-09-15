@@ -23,15 +23,15 @@ type Codec interface {
 
 // Frame defines the interface for a Frame object.
 type Frame interface {
-	// Size returns the number of elements (i.e. which can be embedded in) in the
+	// Size returns the number of elements (which can be embedded in) in the
 	// frame.
 	Size() int
 	// GetElement returns a pointer to the frames ith element. Panics if i >= Size()
 	// or if i < 0.
-	GetElement(i int) *int
-	// SetDirty marks the frame as dirty. You must call this if you modify a frame
-	// element to ensure the frame data is written back to disk.
-	SetDirty()
-	// IsDirty returns true iff the frame has been set dirty.
+	GetElement(i int) int
+	// SetElement sets the ith element to val. Panics if i >= Size() or if i < 0.
+	// Will cause the frame to be considered dirty.
+	SetElement(i, val int)
+	// IsDirty returns true iff the frame is considered dirty.
 	IsDirty() bool
 }

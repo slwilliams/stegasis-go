@@ -48,7 +48,6 @@ func (c *motionJPEGCodec) Decode() error {
 	}
 	fmt.Println("Successfully extracted video frames!")
 
-	// TODO iterate over each JPEG image and decode into Frames and store on c.
 	files, err := ioutil.ReadDir(tempDir)
 	if err != nil {
 		return fmt.Errorf("Failed to read dir %q: %v", tempDir, err)
@@ -60,13 +59,12 @@ func (c *motionJPEGCodec) Decode() error {
 			return fmt.Errorf("Failed to read file %q: %v", f.Name(), err)
 		}
 
-		_, err = jpeg.DecodeJPEG(r)
+		j, err := jpeg.DecodeJPEG(r)
 		if err != nil {
 			return fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
 		}
 
-		// Only do the first one for now.
-		break
+		c.frames = append(c.frames, j)
 	}
 
 	return nil
