@@ -51,7 +51,8 @@ type JPEG struct {
 	// Encoding related fields
 
 	// quant is the scaled quantization tables, in zig-zag order.
-	quant [nQuantIndex][blockSize]byte
+	quant         [nQuantIndex][blockSize]byte
+	eBits, eNBits uint32
 }
 
 // Size returns the total number of DCT coefficients in all blocks.
@@ -738,15 +739,28 @@ func (jp *JPEG) Encode(w io.Writer) error {
 		bw.Write(s.value)
 	}
 
-	/*	// Write the image data.
-		e.writeSOS(m)
-		// Write the End Of Image marker.
-		e.buf[0] = 0xff
-		e.buf[1] = 0xd9
-		e.write(e.buf[:2])
-		e.flush()
-		return e.err*/
-	return nil
+	// Write the image data.
+	bw.Write(sosHeaderYCbCr)
+
+	var prevDCY, prevDCCb, prevDCCr int32
+	for i, b := range jp.blocks {
+		if i == 0 || i == 1 || i == 2 || i == 3 {
+			prevDCY = jp.writeBlock(bw, &b, 0, prevDCY)
+		}
+		if i == 4 {
+			prevDCCb = jp.writeBlock(bw, &b, 1, prevDCCb)
+		}
+		if i == 5 {
+			prevDCCr = jp.writeBlock(bw, &b, 1, prevDCCr)
+		}
+	}
+	jp.emit(bw, 0x7f, 7)
+
+	// Write the End Of Image marker.
+	buff[0] = 0xff
+	buff[1] = 0xd9
+	bw.Write(buff[:2])
+	return bw.Flush()
 }
 
 func writeMarkerHeader(bw *bufio.Writer, marker uint8, markerlen int, buff []byte) {
@@ -755,4 +769,70 @@ func writeMarkerHeader(bw *bufio.Writer, marker uint8, markerlen int, buff []byt
 	buff[2] = uint8(markerlen >> 8)
 	buff[3] = uint8(markerlen & 0xff)
 	bw.Write(buff[:4])
+}
+
+func (j *JPEG) emit(bw *bufio.Writer, bits, nBits uint32) {
+	nBits += j.eNBits
+	bits <<= 32 - nBits
+	bits |= j.eBits
+	for nBits >= 8 {
+		b := uint8(bits >> 24)
+		bw.WriteByte(b)
+		if b == 0xff {
+			bw.WriteByte(0x00)
+		}
+		bits <<= 8
+		nBits -= 8
+	}
+	j.eBits, j.eNBits = bits, nBits
+}
+
+func (jp *JPEG) writeBlock(bw *bufio.Writer, b *block, q quantIndex, prevDC int32) int32 {
+	// Emit the DC delta.
+	dc := div(b[0], 8*int32(jp.quant[q][0]))
+	jp.emitHuffRLE(bw, huffIndex(2*q+0), 0, dc-prevDC)
+	// Emit the AC components.
+	h, runLength := huffIndex(2*q+1), int32(0)
+	for zig := 1; zig < blockSize; zig++ {
+		ac := div(b[unzig[zig]], 8*int32(jp.quant[q][zig]))
+		if ac == 0 {
+			runLength++
+		} else {
+			for runLength > 15 {
+				jp.emitHuff(bw, h, 0xf0)
+				runLength -= 16
+			}
+			jp.emitHuffRLE(bw, h, runLength, ac)
+			runLength = 0
+		}
+	}
+	if runLength > 0 {
+		jp.emitHuff(bw, h, 0x00)
+	}
+	return dc
+}
+
+// emitHuffRLE emits a run of runLength copies of value encoded with the given
+// Huffman encoder.
+func (jp *JPEG) emitHuffRLE(bw *bufio.Writer, h huffIndex, runLength, value int32) {
+	a, b := value, value
+	if a < 0 {
+		a, b = -value, value-1
+	}
+	var nBits uint32
+	if a < 0x100 {
+		nBits = uint32(bitCount[a])
+	} else {
+		nBits = 8 + uint32(bitCount[a>>8])
+	}
+	jp.emitHuff(bw, h, runLength<<4|int32(nBits))
+	if nBits > 0 {
+		jp.emit(bw, uint32(b)&(1<<nBits-1), nBits)
+	}
+}
+
+// emitHuff emits the given value with the given Huffman encoder.
+func (jp *JPEG) emitHuff(bw *bufio.Writer, h huffIndex, value int32) {
+	x := theHuffmanLUT[h][value]
+	jp.emit(bw, x&(1<<24-1), x>>24)
 }

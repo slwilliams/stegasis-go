@@ -16,7 +16,7 @@ import (
 type motionJPEGCodec struct {
 	filePath string
 	opts     MotionJPEGCodecOptions
-	frames   []Frame
+	frames   []*jpeg.JPEG
 }
 
 // MotionJPEGCodecOptions holds options for the motion jpect codec.
@@ -62,7 +62,7 @@ func (c *motionJPEGCodec) Decode() error {
 		mux       sync.Mutex
 		decodeErr error
 	)
-	frames := map[int]Frame{}
+	frames := map[int]*jpeg.JPEG{}
 	for i, f := range files {
 		wg.Add(1)
 		go func() {
@@ -98,6 +98,17 @@ func (c *motionJPEGCodec) Decode() error {
 	}
 
 	fmt.Printf("Finished decoding frame data. Took: %s\n", time.Since(now))
+
+	fmt.Println("Writing back 1 frame!!")
+	f, err := os.Create(fmt.Sprintf("%s\\out.jpeg", os.TempDir()))
+	if err != nil {
+		fmt.Printf("failed to make finle: %v", err)
+	}
+	err = c.frames[0].Encode(f)
+	if err != nil {
+		fmt.Printf("err: %v", err)
+	}
+	f.Close()
 	return nil
 }
 
@@ -137,7 +148,8 @@ func (c *motionJPEGCodec) WriteFrame(i int, f Frame) {
 	if i >= c.Frames() {
 		panic(fmt.Errorf("GetFrame %d is larger than total frame count %d", i, c.Frames()))
 	}
-	c.frames[i] = f
+	jf := f.(*jpeg.JPEG)
+	c.frames[i] = jf
 }
 
 // Close closes the motion JPEG codec.
