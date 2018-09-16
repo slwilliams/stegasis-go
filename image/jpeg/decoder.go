@@ -36,7 +36,8 @@ type component struct {
 
 // JPEG holds a JPEG file and implements thr Frame interface.
 type JPEG struct {
-	Name   string
+	path string
+
 	height int
 	width  int
 	ri     int
@@ -95,7 +96,7 @@ func (j *JPEG) IsDirty() bool {
 
 // DecodeJPEG attempts to decode the given reader as JPEG data giving access to
 // the raw DCT coefficients.
-func DecodeJPEG(r io.Reader, name string) (*JPEG, error) {
+func DecodeJPEG(r io.Reader, path string) (*JPEG, error) {
 	buff := make([]byte, 1024)
 	if _, err := r.Read(buff[:2]); err != nil {
 		return nil, err
@@ -104,7 +105,9 @@ func DecodeJPEG(r io.Reader, name string) (*JPEG, error) {
 		return nil, fmt.Errorf("missing SOI marker at start of file")
 	}
 
-	j := &JPEG{Name: name}
+	j := &JPEG{
+		path: path,
+	}
 
 	for {
 		//fmt.Println("Top")

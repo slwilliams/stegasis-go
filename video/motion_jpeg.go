@@ -82,13 +82,14 @@ func (c *motionJPEGCodec) Decode() error {
 		go func() {
 			defer wg.Done()
 
-			r, err := os.Open(tempDir + "\\" + f.Name())
+			jpegPath := tempDir + "\\" + f.Name()
+			r, err := os.Open(jpegPath)
 			if err != nil {
 				decodeErr = fmt.Errorf("Failed to read file %q: %v", f.Name(), err)
 				return
 			}
 
-			j, err := jpeg.DecodeJPEG(r, f.Name())
+			j, err := jpeg.DecodeJPEG(r, jpegPath)
 			if err != nil {
 				decodeErr = fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
 				return
@@ -125,7 +126,6 @@ func (c *motionJPEGCodec) Decode() error {
 	if err != nil {
 		fmt.Printf("failed to make finle: %v", err)
 	}
-	fmt.Printf("Frame 111 is: %s\n", c.frames[111].Name)
 	err = c.frames[111].Encode(f)
 	if err != nil {
 		fmt.Printf("err: %v", err)
