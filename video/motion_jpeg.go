@@ -155,59 +155,14 @@ func (c *motionJPEGCodec) Frames() int {
 	return len(c.frames)
 }
 
-// WriteFrame overwrites the ith frame of the intermediate video with the
-// provided frame. Panics if i >= Frames() or i < 0.
-func (c *motionJPEGCodec) WriteFrame(i int, f Frame) {
-	if i < 0 {
-		panic(fmt.Errorf("GetFrame %d cannot be negative", i))
-	}
-	if i >= c.Frames() {
-		panic(fmt.Errorf("GetFrame %d is larger than total frame count %d", i, c.Frames()))
-	}
-	jf := f.(*jpeg.JPEG)
-	c.frames[i] = jf
-}
-
 // Close closes the motion JPEG codec.
 func (c *motionJPEGCodec) Close() {
 }
 
-// jpegFrame holds the data of a single JPEG frame (i.e. a single jpeg image).
-// It implements the Frame interface.
-type jpegFrame struct {
-	dirty bool
-}
-
-// Size returns the number of elements (i.e. DCT Coefficients) which can be
-// embedded in within the frame.
-func (f *jpegFrame) Size() int {
-	// TODO implement me.
-	return 0
-}
-
-// GetElement returns the ith frame element (i.e. DCT Coefficient). Panics if
-// i >= Size() or i < 0.
-func (f *jpegFrame) GetElement(i int) *int {
-	// TODO implement me.
-	var ret int
-	return &ret
-}
-
-// SetDirty marks the frame as dirty.
-func (f *jpegFrame) SetDirty() {
-	f.dirty = true
-}
-
-// IsDirty returns true iff the frame has been marked dirty.
-func (f *jpegFrame) IsDirty() bool {
-	return f.dirty
-}
-
 // NewMotionJPEGCodec returns a new motion JPEG codec.
-func NewMotionJPEGCodec(path string, opts MotionJPEGCodecOptions) (Codec, error) {
-	codec := &motionJPEGCodec{
+func NewMotionJPEGCodec(path string, opts MotionJPEGCodecOptions) Codec {
+	return &motionJPEGCodec{
 		filePath: path,
 		opts:     opts,
 	}
-	return codec, codec.Decode()
 }

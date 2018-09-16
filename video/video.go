@@ -12,11 +12,6 @@ type Codec interface {
 	Encode() error
 	// GetFrame returns the ith frame. Panics if i >= Frames() or i < 0.
 	GetFrame(i int) Frame
-	// WriteFrame overwrites the ith frame of the intermediate video with the
-	// provided frame. Panics if i >= Frames() or i < 0. Note that this won't
-	// actually trigger a write of the source video with the new frame data, you
-	// should call Encode if you want this.
-	WriteFrame(i int, f Frame)
 	// Close closes the Codec.
 	Close()
 }

@@ -20,11 +20,11 @@ var (
 func main() {
 	flag.Parse()
 
-	codec, err := video.NewMotionJPEGCodec(flag.Args()[0], video.MotionJPEGCodecOptions{
+	codec := video.NewMotionJPEGCodec(flag.Args()[0], video.MotionJPEGCodecOptions{
 		FrameRate: *frameRate,
 	})
-	if err != nil {
-		fmt.Printf("Failed to create new motion jpeg codec: %v", err)
+	if err := codec.Decode(); err != nil {
+		fmt.Printf("Codec failed to decode: %v", err)
 		os.Exit(1)
 	}
 
