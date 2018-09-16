@@ -120,28 +120,22 @@ func (c *motionJPEGCodec) Decode() error {
 	}
 
 	fmt.Printf("Finished decoding frame data. Took: %s\n", time.Since(now))
-
-	fmt.Println("Writing back 1 frame!!")
-	f, err := os.Create(fmt.Sprintf("%s\\out.jpeg", os.TempDir()))
-	if err != nil {
-		fmt.Printf("failed to make finle: %v", err)
-	}
-	err = c.frames[111].Encode(f)
-	if err != nil {
-		fmt.Printf("err: %v", err)
-	}
-	f.Close()
 	return nil
 }
 
 // Encode converts the sequence of JPEG images to a motion JPEG video
 // overwriting the original source video.
 func (c *motionJPEGCodec) Encode() error {
-	for _, f := range c.frames {
+	for i, f := range c.frames {
 		if f.IsDirty() {
-			// TODO: Write this frame out.
+			err := f.Encode()
+			if err != nil {
+				return fmt.Errorf("Failed to encode frame %d: %v", i, err)
+			}
 		}
 	}
+
+	// TODO call FFMPEG to re-assemble the frames into a mjpeg.
 	return nil
 }
 

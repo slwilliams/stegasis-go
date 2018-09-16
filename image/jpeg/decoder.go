@@ -2,10 +2,10 @@
 package jpeg
 
 import (
-	//	"encoding/hex"
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 )
 
 const (
@@ -719,10 +719,16 @@ func (j *JPEG) decodeHuffman(r io.Reader, h *huffman) (uint8, error) {
 	return 0, fmt.Errorf("bad Huffman code")
 }
 
-// Encode encodes the current JPEG data and writes it out as a jpeg file via the
-// provided writer.
-func (jp *JPEG) Encode(w io.Writer) error {
-	bw := bufio.NewWriter(w)
+// Encode encodes the current JPEG data and writes it out as a jpeg file to the
+// filePath provided when the JPEG was created (i.e. it overwrites the current
+// jpeg on disk).
+func (jp *JPEG) Encode() error {
+	f, err := os.OpenFile(jp.path, os.O_RDWR, 0755)
+	if err != nil {
+		return fmt.Errorf("Could not open %q to write: %v", jp.path, err)
+	}
+
+	bw := bufio.NewWriter(f)
 	buff := make([]byte, 1024)
 
 	// Write the Start Of Image marker.
