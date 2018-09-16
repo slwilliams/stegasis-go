@@ -5,7 +5,10 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"stegasis/image/jpeg"
@@ -45,7 +48,10 @@ func (c *motionJPEGCodec) Decode() error {
 		"-f", "image2",
 		outputPattern,
 	}
-	if err := exec.Command("ffmpeg", args...).Run(); err != nil {
+	cmd := exec.Command("ffmpeg", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("Failed to exec ffmpeg: %v", err)
 	}
 	fmt.Println("Successfully extracted video frames!")
@@ -62,13 +68,19 @@ func (c *motionJPEGCodec) Decode() error {
 		mux       sync.Mutex
 		decodeErr error
 	)
-	frames := map[int]*jpeg.JPEG{}
+
+	total := int32(len(files))
+	c.frames = make([]*jpeg.JPEG, len(files))
+	sem := make(chan struct{}, 20)
 	for i, f := range files {
+		f := f
+		if i == 200 {
+			break
+		}
+		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			i := i
-			f := f
 
 			r, err := os.Open(tempDir + "\\" + f.Name())
 			if err != nil {
@@ -76,25 +88,34 @@ func (c *motionJPEGCodec) Decode() error {
 				return
 			}
 
-			j, err := jpeg.DecodeJPEG(r)
+			j, err := jpeg.DecodeJPEG(r, f.Name())
 			if err != nil {
 				decodeErr = fmt.Errorf("Failed to decode JPEG %q: %v", f.Name(), err)
 				return
 			}
 
+			index := strings.Split(strings.Split(f.Name(), ".")[0], "-")[1]
+			i, err := strconv.Atoi(index)
+			if err != nil {
+				decodeErr = fmt.Errorf("Could not extract index from filename %q: %v", f.Name(), err)
+				return
+			}
+
 			mux.Lock()
-			frames[i] = j
+			c.frames[i] = j
 			mux.Unlock()
+
+			atomic.AddInt32(&total, -1)
+			if total%50 == 0 {
+				fmt.Printf("Frames left: %d\n", total)
+			}
+			<-sem
 		}()
 	}
 	wg.Wait()
 
 	if decodeErr != nil {
 		return decodeErr
-	}
-
-	for _, f := range frames {
-		c.frames = append(c.frames, f)
 	}
 
 	fmt.Printf("Finished decoding frame data. Took: %s\n", time.Since(now))
@@ -104,7 +125,8 @@ func (c *motionJPEGCodec) Decode() error {
 	if err != nil {
 		fmt.Printf("failed to make finle: %v", err)
 	}
-	err = c.frames[0].Encode(f)
+	fmt.Printf("Frame 111 is: %s\n", c.frames[111].Name)
+	err = c.frames[111].Encode(f)
 	if err != nil {
 		fmt.Printf("err: %v", err)
 	}

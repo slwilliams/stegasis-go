@@ -36,6 +36,7 @@ type component struct {
 
 // JPEG holds a JPEG file and implements thr Frame interface.
 type JPEG struct {
+	Name   string
 	height int
 	width  int
 	ri     int
@@ -45,8 +46,9 @@ type JPEG struct {
 	bits  bits
 
 	// The actual DCT coefficients we embed in.
-	blocks []block
-	dirty  bool
+	blocks    []block
+	compIndex []int
+	dirty     bool
 
 	// Encoding related fields
 
@@ -93,7 +95,7 @@ func (j *JPEG) IsDirty() bool {
 
 // DecodeJPEG attempts to decode the given reader as JPEG data giving access to
 // the raw DCT coefficients.
-func DecodeJPEG(r io.Reader) (*JPEG, error) {
+func DecodeJPEG(r io.Reader, name string) (*JPEG, error) {
 	buff := make([]byte, 1024)
 	if _, err := r.Read(buff[:2]); err != nil {
 		return nil, err
@@ -102,7 +104,7 @@ func DecodeJPEG(r io.Reader) (*JPEG, error) {
 		return nil, fmt.Errorf("missing SOI marker at start of file")
 	}
 
-	j := &JPEG{}
+	j := &JPEG{Name: name}
 
 	for {
 		//fmt.Println("Top")
@@ -235,11 +237,49 @@ func (j *JPEG) processSOF(r io.Reader, n int, buff []byte) error {
 	return nil
 }
 
-func (j *JPEG) processDQT(r io.Reader, n int, buff []byte) error {
+func (jp *JPEG) processDQT(r io.Reader, n int, buff []byte) error {
 	//fmt.Println("processDQT")
-	// Just ignore since we don't care about this data.
-	if _, err := r.Read(buff[:n]); err != nil {
-		return err
+loop:
+	for n > 0 {
+		n--
+		if _, err := r.Read(buff[:1]); err != nil {
+			return err
+		}
+		x := buff[0]
+		tq := x & 0x0f
+		if tq > maxTq {
+			return fmt.Errorf("bad Tq value")
+		}
+		switch x >> 4 {
+		default:
+			return fmt.Errorf("bad Pq value")
+		case 0:
+			if n < blockSize {
+				break loop
+			}
+			n -= blockSize
+			if _, err := r.Read(buff[:blockSize]); err != nil {
+				return err
+			}
+			for i := range jp.quant[tq] {
+				jp.quant[tq][i] = buff[i]
+			}
+		case 1:
+			if n < 2*blockSize {
+				break loop
+			}
+			n -= 2 * blockSize
+			if _, err := r.Read(buff[:2*blockSize]); err != nil {
+				return err
+			}
+			for i := range jp.quant[tq] {
+				//jp.quant[tq][i] = int32(buff[2*i])<<8 | int32(buff[2*i+1])
+				jp.quant[tq][i] = buff[2*i+1]
+			}
+		}
+	}
+	if n != 0 {
+		return fmt.Errorf("DQT has wrong length")
 	}
 	return nil
 }
@@ -483,7 +523,7 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 							return err
 						}
 						dc[compIndex] += dcDelta
-						b[0] = dc[compIndex]
+						b[0] = dcDelta
 					}
 
 					if zig <= zigEnd && eobRun > 0 {
@@ -526,6 +566,7 @@ func (jp *JPEG) processSOS(r io.Reader, n int, buff []byte) error {
 						}
 					}
 					jp.blocks = append(jp.blocks, b)
+					jp.compIndex = append(jp.compIndex, int(compIndex))
 				} // for j
 			} // for i
 			mcu++
@@ -686,19 +727,6 @@ func (jp *JPEG) Encode(w io.Writer) error {
 	buff[1] = 0xd8
 	bw.Write(buff[:2])
 
-	for i := range jp.quant {
-		for j := range jp.quant[i] {
-			/*x := int(unscaledQuant[i][j])
-			  x = (x*scale + 50) / 100
-			  if x < 1 {
-			    x = 1
-			  } else if x > 255 {
-			    x = 255
-			  }*/
-			jp.quant[i][j] = uint8(1)
-		}
-	}
-
 	// Write the quantization tables.
 	markerlen := 2 + int(nQuantIndex)*(1+blockSize)
 	writeMarkerHeader(bw, dqtMarker, markerlen, buff)
@@ -720,7 +748,7 @@ func (jp *JPEG) Encode(w io.Writer) error {
 		buff[3*i+6] = uint8(i + 1)
 		// We use 4:2:0 chroma subsampling.
 		buff[3*i+7] = "\x22\x11\x11"[i]
-		buff[3*i+8] = "\x00\x01\x01"[i]
+		buff[3*i+8] = "\x00\x00\x00"[i]
 	}
 
 	bw.Write(buff[:3*(3-1)+9])
@@ -741,27 +769,16 @@ func (jp *JPEG) Encode(w io.Writer) error {
 	// Write the image data.
 	bw.Write(sosHeaderYCbCr)
 
-	var prevDCY, prevDCCb, prevDCCr int32
-	var count, blockType int
-	for _, b := range jp.blocks {
-		if blockType == 0 && count < 4 {
-			prevDCY = jp.writeBlock(bw, &b, 0, prevDCY)
-			count++
-			if count == 4 {
-				blockType = 1
-				count = 0
-			}
-			continue
+	//var prevDCY, prevDCCb, prevDCCr int32
+	for i, b := range jp.blocks {
+		if jp.compIndex[i] == 0 {
+			_ = jp.writeBlock(bw, &b, 0, 0)
 		}
-		if blockType == 1 {
-			prevDCCb = jp.writeBlock(bw, &b, 1, prevDCCb)
-			blockType = 2
-			continue
+		if jp.compIndex[i] == 1 {
+			_ = jp.writeBlock(bw, &b, 1, 0)
 		}
-		if blockType == 2 {
-			prevDCCr = jp.writeBlock(bw, &b, 1, prevDCCr)
-			blockType = 0
-			continue
+		if jp.compIndex[i] == 2 {
+			_ = jp.writeBlock(bw, &b, 1, 0)
 		}
 	}
 	jp.emit(bw, 0x7f, 7)
