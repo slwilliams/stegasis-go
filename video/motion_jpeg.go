@@ -52,6 +52,7 @@ func (c *motionJPEGCodec) Decode() error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		// TODO this doesn't actually give us a useful error message.
 		return fmt.Errorf("Failed to exec ffmpeg: %v", err)
 	}
 	fmt.Println("Successfully extracted video frames!")
@@ -120,6 +121,11 @@ func (c *motionJPEGCodec) Decode() error {
 	}
 
 	fmt.Printf("Finished decoding frame data. Took: %s\n", time.Since(now))
+
+	err = c.frames[111].Encode()
+	if err != nil {
+		fmt.Printf("err: %v\n", err)
+	}
 	return nil
 }
 
